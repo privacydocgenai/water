@@ -5,9 +5,8 @@ fish swimming under the surface.
 
 ## Run
 
-No build step and no server needed — **double-click `index.html`**. Everything
-is in one file; Three.js 0.160 loads from a CDN, so an internet connection is
-required at first load.
+No build step and no server needed — **double-click `index.html`**. Three.js
+0.160 loads from a CDN, so an internet connection is required at first load.
 
 (Serving locally also works: `npx serve .` or `python3 -m http.server 8000`.)
 
@@ -18,9 +17,13 @@ required at first load.
   reflections (oblique frustum clipping), Schlick Fresnel, sun glitter/specular.
 - **Underwater pass** — depth fog (light absorption), animated procedural
   caustics injected into the pool floor/wall materials.
-- **Fish school** — 16 procedurally modeled fish (koi, goldfish, silver
-  sardines) with body-traveling sine swim animation, steering AI, wall/object
-  avoidance and banking on turns.
+- **Realistic fish** — 16 fish (koi with orange/ink patches, goldfish,
+  schooling silver sardines) with painted bodies, countershading, eyes, pectoral
+  fins, and a thrust/drag/banking swim model (speed, turn rate and tail-beat
+  frequency all driven by physics, not scripted paths)
+- **Side & underwater view** — glass pool walls, translucent water volume,
+  animated god rays, drifting particles; dive the camera under the surface to
+  see total-internal-reflection on the water ceiling and a refracted sun spot
 - **Interaction** — orbit/zoom camera, click the water for physically-fading
   ripple rings; occasional automatic ripples keep the surface alive.
 
