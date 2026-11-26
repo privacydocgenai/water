@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Leonida Pools — Realistic Water</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+  #app { width: 100%; height: 100%; }
+  canvas { display: block; }
+  #ui {
+    position: fixed; top: 18px; left: 20px; z-index: 10;
+    color: #fff; font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    text-shadow: 0 1px 8px rgba(0,0,0,.8); user-select: none; pointer-events: none;
+  }
+  #ui h1 {
+    font-size: 26px; letter-spacing: 3px; font-weight: 800;
+    background: linear-gradient(90deg, #ffd28a, #ff7ac3, #8a9bff);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    filter: drop-shadow(0 2px 6px rgba(0,0,0,.6));
+  }
+  #ui p { margin-top: 4px; font-size: 12.5px; opacity: .85; letter-spacing: .5px; }
+  #ui b { color: #ffd28a; font-weight: 600; }
+  #vignette {
+    position: fixed; inset: 0; pointer-events: none; z-index: 5;
+    background: radial-gradient(ellipse at center, transparent 62%, rgba(0,0,0,.32) 100%);
+  }
+  #fallback {
+    position: fixed; inset: 0; display: none; place-items: center;
+    color: #fff; font: 16px Arial; background: #101418; z-index: 20; text-align: center; padding: 24px;
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app"></div>
+<div id="vignette"></div>
+<div id="ui">
+  <h1>LEONIDA&nbsp;POOLS</h1>
+  <p><b>Drag</b> to orbit &nbsp;·&nbsp; <b>Scroll</b> to zoom &nbsp;·&nbsp; <b>Click the water</b> for ripples</p>
+</div>
+<div id="fallback"><div>This demo needs WebGL2.<br/>Please open it in a recent desktop or mobile browser.</div></div>
+<script type="module" src="./main.js"></script>
+</body>
+</html>

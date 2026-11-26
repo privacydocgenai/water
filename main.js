@@ -1,0 +1,684 @@
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const POOL_W = 12;
+const POOL_D = 6;
+const DEPTH = 1.65;
+const WATER_MARGIN = 0.05;
+const MAX_RIPPLES = 10;
+
+const SUN_DIR = new THREE.Vector3(0.35, 0.78, 0.28).normalize();
+const DEEP_COLOR = new THREE.Color(0x063d4d);
+
+if (!window.WebGL2RenderingContext) {
+  document.getElementById('fallback').style.display = 'grid';
+  throw new Error('WebGL2 unavailable');
+}
+
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 400);
+camera.position.set(-7.5, 4.2, 9.5);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, -0.45, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.minDistance = 3.2;
+controls.maxDistance = 26;
+controls.maxPolarAngle = Math.PI * 0.497;
+controls.enablePan = false;
+
+const skyMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide,
+  depthWrite: false,
+  uniforms: { uSunDir: { value: SUN_DIR } },
+  vertexShader: `
+    varying vec3 vDir;
+    void main() {
+      vDir = position;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `
+    uniform vec3 uSunDir;
+    varying vec3 vDir;
+    void main() {
+      vec3 d = normalize(vDir);
+      float h = clamp(d.y * 0.5 + 0.5, 0.0, 1.0);
+      vec3 zenith = vec3(0.22, 0.46, 0.82);
+      vec3 horizon = vec3(0.86, 0.90, 0.94);
+      vec3 ground = vec3(0.42, 0.44, 0.46);
+      vec3 col = mix(horizon, zenith, pow(max(d.y, 0.0), 0.55));
+      col = mix(ground, col, smoothstep(-0.06, 0.02, d.y));
+      float s = max(dot(d, normalize(uSunDir)), 0.0);
+      col += vec3(1.0, 0.92, 0.78) * pow(s, 650.0) * 22.0;
+      col += vec3(1.0, 0.85, 0.65) * pow(s, 12.0) * 0.22;
+      gl_FragColor = vec4(col, 1.0);
+    }`
+});
+const sky = new THREE.Mesh(new THREE.SphereGeometry(190, 32, 20), skyMat);
+scene.add(sky);
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+{
+  const envScene = new THREE.Scene();
+  const envSky = new THREE.Mesh(sky.geometry, skyMat);
+  envScene.add(envSky);
+  scene.environment = pmrem.fromScene(envScene, 0.03).texture;
+  pmrem.dispose();
+}
+
+const sunLight = new THREE.DirectionalLight(0xfff1dc, 2.6);
+sunLight.position.copy(SUN_DIR).multiplyScalar(50);
+scene.add(sunLight);
+scene.add(new THREE.HemisphereLight(0xcfe4ff, 0x3a3f42, 0.85));
+
+function makeTileTexture(tileW, tileH, count, base, variation, grout) {
+  const c = document.createElement('canvas');
+  const S = 1024;
+  c.width = S; c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = grout;
+  ctx.fillRect(0, 0, S, S);
+  const tw = S / count * (tileW / tileH);
+  const th = S / count;
+  const cols = Math.max(1, Math.round(S / tw));
+  for (let j = 0; j < count; j++) {
+    for (let i = 0; i < cols; i++) {
+      const v = (Math.random() - 0.5) * variation;
+      const col = new THREE.Color(base).offsetHSL(0.01 * (Math.random() - 0.5), 0.02 * (Math.random() - 0.5), v);
+      ctx.fillStyle = '#' + col.getHexString();
+      const px = i * tw + 2, py = j * th + 2;
+      const g = ctx.createLinearGradient(px, py, px, py + th);
+      g.addColorStop(0, 'rgba(255,255,255,0.22)');
+      g.addColorStop(0.35, 'rgba(255,255,255,0.0)');
+      g.addColorStop(1, 'rgba(0,0,0,0.14)');
+      ctx.fillRect(px, py, tw - 5, th - 5);
+      ctx.fillStyle = g;
+      ctx.fillRect(px, py, tw - 5, th - 5);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+function makeStoneTexture() {
+  const S = 512;
+  const c = document.createElement('canvas');
+  c.width = S; c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#a89f92';
+  ctx.fillRect(0, 0, S, S);
+  for (let i = 0; i < 26000; i++) {
+    const x = Math.random() * S, y = Math.random() * S;
+    const r = Math.random() * 2.2;
+    const a = 0.05 + Math.random() * 0.08;
+    ctx.fillStyle = Math.random() > 0.5 ? `rgba(60,52,44,${a})` : `rgba(235,228,214,${a})`;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.strokeStyle = 'rgba(70,62,52,0.35)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < 4; j++) {
+      ctx.strokeRect(i * S / 4 + 1, j * S / 4 + 1, S / 4 - 2, S / 4 - 2);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.repeat.set(6, 6);
+  return tex;
+}
+
+const underwaterG = new THREE.Group();
+const aboveG = new THREE.Group();
+scene.add(underwaterG, aboveG);
+
+const tileTex = makeTileTexture(1, 1, 26, 0x9fd3dc, 0.10, '#c9d6d2');
+tileTex.repeat.set(1.8, 1.8);
+const wallTex = makeTileTexture(1, 2, 22, 0xaedde4, 0.10, '#cfdad4');
+wallTex.repeat.set(3.4, 0.7);
+
+const floorMat = new THREE.MeshStandardMaterial({ map: tileTex, roughness: 0.42, metalness: 0.05 });
+const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.42, metalness: 0.05 });
+
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(POOL_W, POOL_D), floorMat);
+floor.rotation.x = -Math.PI / 2;
+floor.position.y = -DEPTH;
+underwaterG.add(floor);
+
+function addWall(w, h, pos, rotY) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
+  m.position.copy(pos);
+  m.rotation.y = rotY;
+  underwaterG.add(m);
+}
+addWall(POOL_W, DEPTH, new THREE.Vector3(0, -DEPTH / 2, -POOL_D / 2), 0);
+addWall(POOL_W, DEPTH, new THREE.Vector3(0, -DEPTH / 2, POOL_D / 2), Math.PI);
+addWall(POOL_D, DEPTH, new THREE.Vector3(-POOL_W / 2, -DEPTH / 2, 0), Math.PI / 2);
+addWall(POOL_D, DEPTH, new THREE.Vector3(POOL_W / 2, -DEPTH / 2, 0), -Math.PI / 2);
+
+function roundedRectPath(w, d, r, PathClass) {
+  const s = new PathClass();
+  const x = w / 2, y = d / 2;
+  s.moveTo(-x + r, -y);
+  s.lineTo(x - r, -y);
+  s.absarc(x - r, -y + r, r, -Math.PI / 2, 0, false);
+  s.lineTo(x, y - r);
+  s.absarc(x - r, y - r, r, 0, Math.PI / 2, false);
+  s.lineTo(-x + r, y);
+  s.absarc(-x + r, y - r, r, Math.PI / 2, Math.PI, false);
+  s.lineTo(-x, -y + r);
+  s.absarc(-x + r, -y + r, r, Math.PI, Math.PI * 1.5, false);
+  return s;
+}
+const OD_W = 27, OD_D = 17, r = 1.4;
+const deckShape = roundedRectPath(OD_W, OD_D, r, THREE.Shape);
+const holePath = roundedRectPath(POOL_W + 0.12, POOL_D + 0.12, 0.3, THREE.Path);
+holePath.closePath();
+deckShape.holes.push(holePath);
+const stoneTex = makeStoneTexture();
+const deckMat = new THREE.MeshStandardMaterial({ map: stoneTex, roughness: 0.95, metalness: 0 });
+const deck = new THREE.Mesh(
+  new THREE.ExtrudeGeometry(deckShape, { depth: 0.14, bevelEnabled: false }),
+  deckMat
+);
+deck.rotation.x = -Math.PI / 2;
+deck.position.y = 0.14;
+aboveG.add(deck);
+
+const copingMat = new THREE.MeshStandardMaterial({ color: 0xe8e2d6, roughness: 0.7 });
+function addCoping(w, d, x, z) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.045, d), copingMat);
+  m.position.set(x, 0.03, z);
+  aboveG.add(m);
+}
+addCoping(POOL_W + 0.45, 0.28, 0, -POOL_D / 2 - 0.08);
+addCoping(POOL_W + 0.45, 0.28, 0, POOL_D / 2 + 0.08);
+addCoping(0.28, POOL_D + 0.45, -POOL_W / 2 - 0.08, 0);
+addCoping(0.28, POOL_D + 0.45, POOL_W / 2 + 0.08, 0);
+
+const causticUniforms = { uTime: { value: 0 } };
+function injectCaustics(material, strength, scale) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = causticUniforms.uTime;
+    shader.uniforms.uCauStrength = { value: strength };
+    shader.uniforms.uCauScale = { value: scale };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vCauPos;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCauPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', [
+        '#include <common>',
+        'varying vec3 vCauPos;',
+        'uniform float uTime;',
+        'uniform float uCauStrength;',
+        'uniform float uCauScale;',
+        'float causticPattern(vec2 uv, float t) {',
+        '  vec2 p = uv * 6.28318;',
+        '  vec2 k = p;',
+        '  float acc = 1.0;',
+        '  float inten = 0.005;',
+        '  for (int i = 0; i < 4; i++) {',
+        '    float ft = t * (1.0 - 3.5 / float(i + 1));',
+        '    k = p + vec2(cos(ft - k.x) + sin(ft + k.y), sin(ft - k.y) + cos(ft + k.x));',
+        '    acc += 1.0 / length(vec2(p.x / (sin(k.x + ft) / inten), p.y / (cos(k.y + ft) / inten)));',
+        '  }',
+        '  acc /= 4.0;',
+        '  acc = 1.17 - pow(acc, 1.4);',
+        '  return pow(abs(acc), 8.0);',
+        '}'
+      ].join('\n'))
+      .replace('#include <emissivemap_fragment>', [
+        '#include <emissivemap_fragment>',
+        'float cau = causticPattern(vCauPos.xz * uCauScale, uTime * 0.55);',
+        'cau *= smoothstep(-1.9, -0.25, vCauPos.y);',
+        'totalEmissiveRadiance += vec3(0.42, 0.75, 0.78) * min(cau, 1.6) * uCauStrength;'
+      ].join('\n'));
+  };
+  material.customProgramCacheKey = () => 'caustic' + strength + scale;
+}
+injectCaustics(floorMat, 0.85, 0.8);
+injectCaustics(wallMat, 0.5, 0.8);
+
+const MAX_FISH = 16;
+const fishList = [];
+
+function createFishGeometry() {
+  const bodyGeo = new THREE.SphereGeometry(1, 22, 14);
+  const pos = bodyGeo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const tailTaper = 1 - 0.82 * Math.pow(THREE.MathUtils.clamp((-x - 0.15) / 0.85, 0, 1), 1.35);
+    const headTaper = 1 - 0.4 * Math.pow(THREE.MathUtils.clamp((x - 0.55) / 0.45, 0, 1), 2);
+    const s = tailTaper * headTaper;
+    pos.setY(i, pos.getY(i) * 0.36 * s);
+    pos.setZ(i, pos.getZ(i) * 0.17 * s);
+  }
+  bodyGeo.computeVertexNormals();
+
+  const finVerts = [
+    -0.72, 0.03, 0, -1.42, 0.4, 0, -1.3, -0.06, 0,
+    -0.72, -0.03, 0, -1.3, 0.06, 0, -1.42, -0.4, 0,
+    -0.72, 0.03, 0, -1.3, -0.06, 0, -1.42, -0.4, 0,
+    -0.72, -0.03, 0, -1.42, 0.4, 0, -1.3, 0.06, 0,
+    0.18, 0.3, 0, -0.4, 0.26, 0, -0.08, 0.52, 0,
+    0.1, 0.24, 0, -0.28, -0.26, 0, -0.05, -0.1, 0
+  ];
+  const finGeo = new THREE.BufferGeometry();
+  finGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(finVerts), 3));
+  finGeo.computeVertexNormals();
+  return { bodyGeo, finGeo };
+}
+const FISH_GEO = createFishGeometry();
+
+const FISH_TYPES = [
+  { name: 'koi',    color: 0xff7a18, metal: 0.15, rough: 0.4, lens: [0.4, 0.55], spd: [0.35, 0.6], depth: [-0.35, -0.15], count: 3 },
+  { name: 'koi2',   color: 0xf3ede0, metal: 0.2,  rough: 0.42, lens: [0.4, 0.55], spd: [0.35, 0.6], depth: [-0.4, -0.2], count: 2 },
+  { name: 'gold',   color: 0xffa41c, metal: 0.3,  rough: 0.35, lens: [0.2, 0.28], spd: [0.45, 0.85], depth: [-0.9, -0.3], count: 3 },
+  { name: 'sardine',color: 0xc3d2da, metal: 0.85, rough: 0.18, lens: [0.11, 0.15], spd: [0.9, 1.5], depth: [-1.1, -0.5], count: 8 }
+];
+
+class Fish {
+  constructor(type, i) {
+    this.type = type;
+    const L = THREE.MathUtils.randFloat(type.lens[0], type.lens[1]);
+    this.length = L;
+    this.group = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(type.color).offsetHSL(0, 0, THREE.MathUtils.randFloatSpread(0.06)),
+      metalness: type.metal, roughness: type.rough
+    });
+    const finMat = new THREE.MeshStandardMaterial({
+      color: type.color, metalness: type.metal * 0.7, roughness: type.rough + 0.1,
+      side: THREE.DoubleSide, transparent: true, opacity: 0.85
+    });
+    this.body = new THREE.Mesh(FISH_GEO.bodyGeo, bodyMat);
+    this.fins = new THREE.Mesh(FISH_GEO.finGeo, finMat);
+    this.group.add(this.body, this.fins);
+    this.group.scale.setScalar(L);
+    this.origBody = this.body.geometry.attributes.position.array.slice();
+    this.origFins = this.fins.geometry.attributes.position.array.slice();
+    this.pos = new THREE.Vector3(
+      THREE.MathUtils.randFloatSpread(POOL_W - 1.5),
+      THREE.MathUtils.randFloat(type.depth[0], type.depth[1]),
+      THREE.MathUtils.randFloatSpread(POOL_D - 1.0)
+    );
+    this.heading = new THREE.Vector3(Math.random() - 0.5, -0.05, Math.random() - 0.5).normalize();
+    this.speed = THREE.MathUtils.randFloat(type.spd[0], type.spd[1]);
+    this.turnRate = THREE.MathUtils.randFloat(0.9, 1.6);
+    this.phase = Math.random() * Math.PI * 2;
+    this.retarget(0);
+    underwaterG.add(this.group);
+    fishList.push(this);
+    this.idx = i;
+  }
+  retarget(t) {
+    const m = 0.8;
+    this.target = new THREE.Vector3(
+      THREE.MathUtils.randFloat(-POOL_W / 2 + m, POOL_W / 2 - m),
+      THREE.MathUtils.randFloat(this.type.depth[0], this.type.depth[1]),
+      THREE.MathUtils.randFloat(-POOL_D / 2 + m, POOL_D / 2 - m)
+    );
+    this.timer = t + THREE.MathUtils.randFloat(3.5, 8);
+  }
+  update(dt, t) {
+    if (t > this.timer) this.retarget(t);
+    const desired = this.target.clone().sub(this.pos);
+    const dLen = desired.length();
+    if (dLen < 0.35) this.retarget(t);
+    desired.normalize();
+    const XLO = -POOL_W / 2 + 0.5, XHI = POOL_W / 2 - 0.5;
+    const ZLO = -POOL_D / 2 + 0.5, ZHI = POOL_D / 2 - 0.5;
+    const YLO = -DEPTH + 0.3, YHI = -0.14;
+    const repulse = new THREE.Vector3();
+    if (this.pos.x < XLO) repulse.x += XLO - this.pos.x;
+    if (this.pos.x > XHI) repulse.x -= this.pos.x - XHI;
+    if (this.pos.z < ZLO) repulse.z += ZLO - this.pos.z;
+    if (this.pos.z > ZHI) repulse.z -= this.pos.z - ZHI;
+    if (this.pos.y < YLO) repulse.y += (YLO - this.pos.y);
+    if (this.pos.y > YHI) repulse.y -= (this.pos.y - YHI);
+    desired.addScaledVector(repulse, 6);
+    const other = fishList[Math.min((this.idx * 7 + 3) % fishList.length, fishList.length - 1)];
+    if (other !== this) {
+      const dp = this.pos.distanceTo(other.pos);
+      if (dp < 0.35) desired.addScaledVector(this.pos.clone().sub(other.pos).normalize(), (0.35 - dp) * 5);
+    }
+    desired.normalize();
+    const prevHeading = this.heading.clone();
+    this.heading.lerp(desired, Math.min(1, dt * this.turnRate));
+    if (this.heading.lengthSq() < 1e-6) this.heading.copy(prevHeading);
+    this.heading.normalize();
+    const turn = Math.abs(prevHeading.angleTo(this.heading)) / Math.max(dt, 1e-4);
+    const speedNow = this.speed * (1 - Math.min(turn * 0.25, 0.4));
+    this.pos.addScaledVector(this.heading, speedNow * dt);
+    this.pos.y = THREE.MathUtils.clamp(this.pos.y, -DEPTH + 0.2, -0.12);
+    this.pos.x = THREE.MathUtils.clamp(this.pos.x, -POOL_W / 2 + 0.4, POOL_W / 2 - 0.4);
+    this.pos.z = THREE.MathUtils.clamp(this.pos.z, -POOL_D / 2 + 0.4, POOL_D / 2 - 0.4);
+
+    const fwd = this.heading;
+    const upRef = new THREE.Vector3(0, 1, 0);
+    if (Math.abs(fwd.dot(upRef)) > 0.99) upRef.set(1, 0, 0);
+    const right = new THREE.Vector3().crossVectors(upRef, fwd).normalize();
+    const up = new THREE.Vector3().crossVectors(fwd, right).normalize();
+    const bank = THREE.MathUtils.clamp(-prevHeading.angleTo(this.heading) * 40 * Math.sign(prevHeading.x * this.heading.z - prevHeading.z * this.heading.x), -0.4, 0.4);
+    const roll = new THREE.Quaternion().setFromAxisAngle(fwd, bank);
+    const m = new THREE.Matrix4().makeBasis(fwd, up, right);
+    this.group.quaternion.setFromRotationMatrix(m).premultiply(roll);
+    this.group.position.copy(this.pos);
+
+    this.phase += dt * (3.5 + speedNow * 7);
+    const swimA = Math.min(0.1 + speedNow * 0.22, 0.34);
+    this.deform(this.body, this.origBody, swimA);
+    this.deform(this.fins, this.origFins, swimA);
+  }
+  deform(mesh, orig, amp) {
+    const attr = mesh.geometry.attributes.position;
+    const arr = attr.array;
+    for (let i = 0; i < arr.length; i += 3) {
+      const x = orig[i];
+      const s = (1 - (x + 1) / 2);
+      const swayAmp = Math.pow(THREE.MathUtils.clamp(0.5 - x * 0.5, 0, 1.1), 1.7);
+      arr[i] = x;
+      arr[i + 1] = orig[i + 1];
+      arr[i + 2] = orig[i + 2] + amp * swayAmp * Math.sin(this.phase - 5.2 * s);
+    }
+    attr.needsUpdate = true;
+    mesh.geometry.computeVertexNormals();
+  }
+}
+{
+  let fi = 0;
+  for (const type of FISH_TYPES) {
+    for (let n = 0; n < type.count; n++) { if (fi >= MAX_FISH) break; new Fish(type, fi++); }
+  }
+}
+
+const waterGeo = new THREE.PlaneGeometry(POOL_W - 0.08, POOL_D - 0.08, 220, 130);
+waterGeo.rotateX(-Math.PI / 2);
+const rippleData = [];
+for (let i = 0; i < MAX_RIPPLES; i++) rippleData.push(new THREE.Vector4(0, 0, -9999, 0));
+let rippleCursor = 0;
+
+const waterMat = new THREE.ShaderMaterial({
+  uniforms: {
+    uTime: { value: 0 },
+    uSunDir: { value: SUN_DIR },
+    uCamPos: { value: new THREE.Vector3() },
+    uReflTex: { value: null },
+    uRefrTex: { value: null },
+    uReflMatrix: { value: new THREE.Matrix4() },
+    uResolution: { value: new THREE.Vector2(1, 1) },
+    uRipples: { value: rippleData },
+    uDeep: { value: DEEP_COLOR }
+  },
+  vertexShader: `
+    uniform float uTime;
+    uniform vec4 uRipples[${MAX_RIPPLES}];
+    uniform mat4 uReflMatrix;
+    varying vec3 vWorldPos;
+    varying vec4 vReflCoord;
+
+    float waveHeight(vec2 p, float t) {
+      float h = 0.0;
+      h += 0.020 * sin(dot(p, vec2(0.62, 0.55)) * 1.05 + t * 1.15);
+      h += 0.014 * sin(dot(p, vec2(-0.58, 0.62)) * 1.55 + t * 1.6);
+      h += 0.009 * sin(dot(p, vec2(0.30, -0.75)) * 2.35 + t * 2.2);
+      h += 0.006 * sin(dot(p, vec2(1.25, 0.85)) * 3.6 + t * 3.0);
+      h += 0.004 * sin(dot(p, vec2(-1.7, 1.2)) * 5.4 + t * 4.1);
+      for (int i = 0; i < ${MAX_RIPPLES}; i++) {
+        vec4 r = uRipples[i];
+        float age = t - r.z;
+        if (r.w <= 0.0 || age < 0.0 || age > 6.0) continue;
+        float d = distance(p, r.xy);
+        float x = d - age * 0.9;
+        float fade = exp(-x * x * 34.0) * exp(-age * 0.9) / (1.0 + d * 1.4);
+        h += r.w * fade * sin(d * 24.0 - age * 18.0);
+      }
+      return h;
+    }
+
+    void main() {
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      wp.y += waveHeight(wp.xz, uTime);
+      vWorldPos = wp.xyz;
+      vReflCoord = uReflMatrix * wp;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }`,
+  fragmentShader: `
+    uniform float uTime;
+    uniform vec3 uSunDir;
+    uniform vec3 uCamPos;
+    uniform sampler2D uReflTex;
+    uniform sampler2D uRefrTex;
+    uniform vec2 uResolution;
+    uniform vec4 uRipples[${MAX_RIPPLES}];
+    uniform vec3 uDeep;
+    varying vec3 vWorldPos;
+    varying vec4 vReflCoord;
+
+    float waveHeight(vec2 p, float t) {
+      float h = 0.0;
+      h += 0.020 * sin(dot(p, vec2(0.62, 0.55)) * 1.05 + t * 1.15);
+      h += 0.014 * sin(dot(p, vec2(-0.58, 0.62)) * 1.55 + t * 1.6);
+      h += 0.009 * sin(dot(p, vec2(0.30, -0.75)) * 2.35 + t * 2.2);
+      h += 0.006 * sin(dot(p, vec2(1.25, 0.85)) * 3.6 + t * 3.0);
+      h += 0.004 * sin(dot(p, vec2(-1.7, 1.2)) * 5.4 + t * 4.1);
+      for (int i = 0; i < ${MAX_RIPPLES}; i++) {
+        vec4 r = uRipples[i];
+        float age = t - r.z;
+        if (r.w <= 0.0 || age < 0.0 || age > 6.0) continue;
+        float d = distance(p, r.xy);
+        float x = d - age * 0.9;
+        float fade = exp(-x * x * 34.0) * exp(-age * 0.9) / (1.0 + d * 1.4);
+        h += r.w * fade * sin(d * 24.0 - age * 18.0);
+      }
+      return h;
+    }
+
+    void main() {
+      vec2 p = vWorldPos.xz;
+      float e = 0.018;
+      float hL = waveHeight(p - vec2(e, 0.0), uTime);
+      float hR = waveHeight(p + vec2(e, 0.0), uTime);
+      float hB = waveHeight(p - vec2(0.0, e), uTime);
+      float hF = waveHeight(p + vec2(0.0, e), uTime);
+      vec3 N = normalize(vec3(hL - hR, 2.0 * e, hB - hF));
+
+      vec2 g = vec2(0.0);
+      g += cos(dot(p, vec2(12.5, 8.7)) + uTime * 3.4) * vec2(12.5, 8.7) * 0.0016;
+      g += cos(dot(p, vec2(-9.7, 14.3)) + uTime * 4.6) * vec2(-9.7, 14.3) * 0.0013;
+      g += cos(dot(p, vec2(21.0, -16.0)) + uTime * 6.8) * vec2(21.0, -16.0) * 0.0007;
+      N = normalize(N + vec3(-g.x, 0.0, -g.y) * 2.0);
+
+      vec3 V = normalize(uCamPos - vWorldPos);
+
+      vec2 ruv = (vReflCoord.xy / vReflCoord.w) * 0.5 + 0.5;
+      ruv += N.xz * 0.35 / max(length(uCamPos - vWorldPos), 1.0);
+      vec3 refl = texture2D(uReflTex, clamp(ruv, vec2(0.001), vec2(0.999))).rgb;
+
+      vec2 uvBase = gl_FragCoord.xy / uResolution;
+      vec2 duv = N.xz * 0.09;
+      vec2 uvR = clamp(uvBase + duv, vec2(0.001), vec2(0.999));
+      vec2 uvG = clamp(uvBase + duv * 1.3, vec2(0.001), vec2(0.999));
+      vec2 uvB = clamp(uvBase + duv * 1.6, vec2(0.001), vec2(0.999));
+      vec3 refr = vec3(
+        texture2D(uRefrTex, uvR).r,
+        texture2D(uRefrTex, uvG).g,
+        texture2D(uRefrTex, uvB).b
+      );
+      refr = mix(refr * vec3(0.72, 0.96, 1.0), uDeep, 0.28);
+
+      float F = 0.02 + 0.98 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
+      vec3 col = mix(refr, refl, clamp(F, 0.0, 1.0));
+
+      vec3 R = reflect(-V, N);
+      float sD = max(dot(R, normalize(uSunDir)), 0.0);
+      float glint = pow(sD, 420.0) * 4.0 + pow(sD, 48.0) * 0.28;
+      col += vec3(1.0, 0.95, 0.85) * glint * smoothstep(0.0, 0.25, N.y);
+
+      float dispos = 0.75 + 0.25 * sin(uTime * 0.7 + p.x * 2.0 + p.y * 3.0);
+      col *= dispos;
+
+      gl_FragColor = vec4(col, 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`
+});
+const water = new THREE.Mesh(waterGeo, waterMat);
+scene.add(water);
+
+const rtParams = {
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+  type: THREE.HalfFloatType,
+  depthBuffer: true
+};
+let reflRT = new THREE.WebGLRenderTarget(1024, 1024, rtParams);
+let refrRT = new THREE.WebGLRenderTarget(2, 2, rtParams);
+waterMat.uniforms.uReflTex.value = reflRT.texture;
+waterMat.uniforms.uRefrTex.value = refrRT.texture;
+
+const virtualCamera = new THREE.PerspectiveCamera();
+const planeNormal = new THREE.Vector3(0, 1, 0);
+const planePoint = new THREE.Vector3(0, 0, 0);
+
+function updateReflection() {
+  const camPos = camera.position;
+  const camDir = new THREE.Vector3();
+  camera.getWorldDirection(camDir);
+  const lookTarget = camPos.clone().addScaledVector(camDir, 10);
+  const posR = camPos.clone();
+  posR.y = 2 * planePoint.y - posR.y;
+  const tgtR = lookTarget.clone();
+  tgtR.y = 2 * planePoint.y - tgtR.y;
+  const upW = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+  upW.y = -upW.y;
+  virtualCamera.position.copy(posR);
+  virtualCamera.up.copy(upW);
+  virtualCamera.lookAt(tgtR);
+  virtualCamera.near = camera.near;
+  virtualCamera.far = camera.far;
+  virtualCamera.updateMatrixWorld();
+  virtualCamera.projectionMatrix.copy(camera.projectionMatrix);
+
+  const clipPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, planePoint);
+  clipPlane.applyMatrix4(virtualCamera.matrixWorldInverse);
+  const cp = new THREE.Vector4(clipPlane.normal.x, clipPlane.normal.y, clipPlane.normal.z, clipPlane.constant);
+  const proj = virtualCamera.projectionMatrix;
+  const q = new THREE.Vector4(
+    (Math.sign(cp.x) + proj.elements[8]) / proj.elements[0],
+    (Math.sign(cp.y) + proj.elements[9]) / proj.elements[5],
+    -1.0,
+    (1.0 + proj.elements[10]) / proj.elements[14]
+  );
+  cp.multiplyScalar(2.0 / cp.dot(q));
+  proj.elements[2] = cp.x;
+  proj.elements[6] = cp.y;
+  proj.elements[10] = cp.z + 1.0 - 0.003;
+  proj.elements[14] = cp.w;
+
+  waterMat.uniforms.uReflMatrix.value.multiplyMatrices(virtualCamera.projectionMatrix, virtualCamera.matrixWorldInverse);
+  return virtualCamera;
+}
+
+const underwaterFog = new THREE.FogExp2(0x07566a, 0.16);
+const raycaster = new THREE.Raycaster();
+const waterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const ndc = new THREE.Vector2();
+
+function addRipple(clientX, clientY, amp) {
+  ndc.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const hit = new THREE.Vector3();
+  if (raycaster.ray.intersectPlane(waterPlane, hit)) {
+    if (Math.abs(hit.x) < POOL_W / 2 && Math.abs(hit.z) < POOL_D / 2) {
+      const r = rippleData[rippleCursor];
+      r.set(hit.x, hit.z, clockTime, amp);
+      rippleCursor = (rippleCursor + 1) % MAX_RIPPLES;
+    }
+  }
+}
+renderer.domElement.addEventListener('pointerdown', (e) => addRipple(e.clientX, e.clientY, 0.055));
+
+let autoRippleT = 2.5;
+function onResize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  const dpr = renderer.getPixelRatio();
+  refrRT.setSize(w * dpr, h * dpr);
+  reflRT.setSize(Math.min(1024, w * dpr), Math.min(1024, h * dpr));
+  waterMat.uniforms.uResolution.value.set(w * dpr, h * dpr);
+}
+window.addEventListener('resize', onResize);
+onResize();
+
+const clock = new THREE.Clock();
+let clockTime = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  clockTime += dt;
+  const t = clockTime;
+
+  causticUniforms.uTime.value = t;
+  waterMat.uniforms.uTime.value = t;
+  waterMat.uniforms.uCamPos.value.copy(camera.position);
+
+  autoRippleT -= dt;
+  if (autoRippleT <= 0) {
+    autoRippleT = THREE.MathUtils.randFloat(2.5, 7);
+    const r = rippleData[rippleCursor];
+    r.set(THREE.MathUtils.randFloatSpread(POOL_W - 2), THREE.MathUtils.randFloatSpread(POOL_D - 1.4), t, 0.02);
+    rippleCursor = (rippleCursor + 1) % MAX_RIPPLES;
+  }
+
+  for (const f of fishList) f.update(dt, t);
+  controls.update();
+
+  const toneMapping = renderer.toneMapping;
+  const prevBackground = scene.background;
+
+  water.visible = false;
+
+  const vCam = updateReflection();
+  underwaterG.visible = false;
+  renderer.toneMapping = THREE.NoToneMapping;
+  renderer.setRenderTarget(reflRT);
+  renderer.clear();
+  renderer.render(scene, vCam);
+
+  underwaterG.visible = true;
+  aboveG.visible = false;
+  sky.visible = false;
+  scene.fog = underwaterFog;
+  renderer.setClearColor(DEEP_COLOR);
+  renderer.setRenderTarget(refrRT);
+  renderer.clear();
+  renderer.render(scene, camera);
+  scene.fog = null;
+
+  aboveG.visible = true;
+  sky.visible = true;
+  water.visible = true;
+  renderer.toneMapping = toneMapping;
+  renderer.setRenderTarget(null);
+  scene.background = prevBackground;
+  renderer.render(scene, camera);
+}
+animate();
