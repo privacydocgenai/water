@@ -5,13 +5,11 @@ fish swimming under the surface.
 
 ## Run
 
-```bash
-npx serve .        # or: python3 -m http.server 8000
-```
+No build step and no server needed — **double-click `index.html`**. Everything
+is in one file; Three.js 0.160 loads from a CDN, so an internet connection is
+required at first load.
 
-Then open the URL shown (http://localhost:8000). Opening `index.html` directly
-in a browser also works (Three.js loads from a CDN, so an internet connection
-is required).
+(Serving locally also works: `npx serve .` or `python3 -m http.server 8000`.)
 
 ## Features
 
@@ -28,5 +26,6 @@ is required).
 
 ## Files
 
-- `index.html` — page shell, HUD, import map
-- `main.js` — scene, shaders, fish simulation, render pipeline
+- `index.html` — whole demo in one file: page shell, HUD, import map,
+  scene code, water/reflection/refraction shaders, fish simulation
+- `README.md` — this file
